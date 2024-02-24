@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
-#include <thread>
 #include <string>
+#include <omp.h>
 
 using namespace std;
 
@@ -48,7 +48,7 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
                 if (localWordCountSize == localWordCountCapacity) {
                     resizeWordCounts(localWordCounts, localWordCountCapacity);
                 }
-                localWordCounts[localWordCountSize++] = WordCount{word, 1};
+                localWordCounts[localWordCountSize++] = {word, 1};
             }
             word.clear();
         }
@@ -66,7 +66,7 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
             if (localWordCountSize == localWordCountCapacity) {
                 resizeWordCounts(localWordCounts, localWordCountCapacity);
             }
-            localWordCounts[localWordCountSize++] = WordCount{word, 1};
+            localWordCounts[localWordCountSize++] = {word, 1};
         }
     }
 }
@@ -89,18 +89,25 @@ void merge(WordCount arr[], int l, int m, int r) {
 
     while (i < n1 && j < n2) {
         if (L[i].count >= R[j].count) {
-            arr[k++] = L[i++];
+            arr[k] = L[i];
+            i++;
         } else {
-            arr[k++] = R[j++];
+            arr[k] = R[j];
+            j++;
         }
+        k++;
     }
 
     while (i < n1) {
-        arr[k++] = L[i++];
+        arr[k] = L[i];
+        i++;
+        k++;
     }
 
     while (j < n2) {
-        arr[k++] = R[j++];
+        arr[k] = R[j];
+        j++;
+        k++;
     }
 
     delete[] L;
@@ -154,50 +161,40 @@ int main(int argc, char** argv) {
     file.close();
 
     int numThreads = atoi(argv[2]);
-    auto start = chrono::high_resolution_clock::now();
-    thread* threads = new thread[numThreads];
-    WordCount** localWordCounts = new WordCount*[numThreads];
-    int* localWordCountSizes = new int[numThreads]{0};
-    int* localWordCountCapacities = new int[numThreads];
-
-    for (int i = 0; i < numThreads; ++i) {
-        localWordCounts[i] = new WordCount[INITIAL_CAPACITY];
-        localWordCountCapacities[i] = INITIAL_CAPACITY;
-    }
-
     size_t chunkSize = fileContents.size() / numThreads;
-    auto startTime = chrono::high_resolution_clock::now();
-
-    for (size_t i = 0; i < numThreads; ++i) {
-        size_t start = i * chunkSize;
-        size_t end = (i + 1) * chunkSize;
-        if (i == numThreads - 1) {
-            end = fileContents.size();
-        }
-        while (end < fileContents.size() && isalpha(fileContents[end])) {
-            ++end;
-        }
-        threads[i] = thread(processTextChunk, fileContents.substr(start, end - start), ref(localWordCounts[i]), ref(localWordCountSizes[i]), ref(localWordCountCapacities[i]));
-    }
-
-    for (int i = 0; i < numThreads; ++i) {
-        threads[i].join();
-    }
 
     WordCount* globalWordCounts = new WordCount[INITIAL_CAPACITY];
     int globalWordCountSize = 0;
     int globalWordCountCapacity = INITIAL_CAPACITY;
 
-    for (int i = 0; i < numThreads; ++i) {
-        mergeGlobalCounts(globalWordCounts, globalWordCountSize, globalWordCountCapacity, localWordCounts[i], localWordCountSizes[i]);
+    #pragma omp parallel num_threads(numThreads)
+    {
+        int threadNum = omp_get_thread_num();
+        WordCount* localWordCounts = new WordCount[INITIAL_CAPACITY];
+        int localWordCountSize = 0;
+        int localWordCountCapacity = INITIAL_CAPACITY;
+
+        size_t start = threadNum * chunkSize;
+        size_t end = (threadNum + 1) * chunkSize;
+        if (threadNum == numThreads - 1) {
+            end = fileContents.size();
+        }
+        // Ensure we don't split a word between chunks
+        if (end < fileContents.size() && isalpha(fileContents[end])) {
+            while (end < fileContents.size() && isalpha(fileContents[end])) {
+                ++end;
+            }
+        }
+
+        processTextChunk(fileContents.substr(start, end - start), localWordCounts, localWordCountSize, localWordCountCapacity);
+
+        #pragma omp critical
+        mergeGlobalCounts(globalWordCounts, globalWordCountSize, globalWordCountCapacity, localWordCounts, localWordCountSize);
+
+        delete[] localWordCounts;
     }
 
     mergeSort(globalWordCounts, 0, globalWordCountSize - 1);
-
-    auto endTime = chrono::high_resolution_clock::now(); 
-
-    chrono::duration<double, milli> runtime = endTime - startTime;
-    cout << "Runtime: " << runtime.count() << " ms" << endl;   
 
     ofstream outputFile("output.txt");
     for (int i = 0; i < globalWordCountSize; ++i) {
@@ -205,14 +202,7 @@ int main(int argc, char** argv) {
     }
     outputFile.close();
 
-    for (int i = 0; i < numThreads; ++i) {
-        delete[] localWordCounts[i];
-    }
-    delete[] localWordCounts;
-    delete[] localWordCountSizes;
-    delete[] localWordCountCapacities;
     delete[] globalWordCounts;
-    delete[] threads;
 
     return 0;
 }
