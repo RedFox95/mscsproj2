@@ -39,6 +39,8 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
             word += toLower(c);
         } else if (!word.empty()) {
             bool found = false;
+            // #pragma omp for // if we do this here then found is always false. can't make it shared either..
+            // in writeup can mention figuring out when was best to use "omp for" - since it doesn't seem great for this exact implementation
             for (int i = 0; i < localWordCountSize; ++i) {
                 if (localWordCounts[i].word == word) {
                     localWordCounts[i].count++;
