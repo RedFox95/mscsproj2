@@ -1,7 +1,8 @@
 #include <iostream>
 #include <fstream>
-#include <thread>
+#include <omp.h>
 #include <string>
+#include <chrono>
 
 using namespace std;
 
@@ -142,7 +143,7 @@ int main(int argc, char** argv) {
         cerr << "Usage: " << argv[0] << " <inputFile> <numberOfThreads>\n";
         return 1;
     }
-
+    int numThreads = atoi(argv[2]);
     string inputFile = argv[1];
     ifstream file(inputFile);
     if (!file) {
@@ -153,9 +154,6 @@ int main(int argc, char** argv) {
     string fileContents((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
     file.close();
 
-    int numThreads = atoi(argv[2]);
-    auto start = chrono::high_resolution_clock::now();
-    thread* threads = new thread[numThreads];
     WordCount** localWordCounts = new WordCount*[numThreads];
     int* localWordCountSizes = new int[numThreads]{0};
     int* localWordCountCapacities = new int[numThreads];
@@ -166,22 +164,35 @@ int main(int argc, char** argv) {
     }
 
     size_t chunkSize = fileContents.size() / numThreads;
+    string chunks[numThreads];
     auto startTime = chrono::high_resolution_clock::now();
 
+    size_t start, end;
+    bool endChanged = false;
     for (size_t i = 0; i < numThreads; ++i) {
-        size_t start = i * chunkSize;
-        size_t end = (i + 1) * chunkSize;
+        if (endChanged) {
+            // adjust the starting index if we had to move the previous ending index
+            start = end + 1;
+        } else {
+            start = i * chunkSize;
+        }
+        end = (i + 1) * chunkSize;
         if (i == numThreads - 1) {
             end = fileContents.size();
         }
         while (end < fileContents.size() && isalpha(fileContents[end])) {
             ++end;
+            endChanged = true;
         }
-        threads[i] = thread(processTextChunk, fileContents.substr(start, end - start), ref(localWordCounts[i]), ref(localWordCountSizes[i]), ref(localWordCountCapacities[i]));
+        chunks[i] = fileContents.substr(start, end - start);
     }
 
-    for (int i = 0; i < numThreads; ++i) {
-        threads[i].join();
+    omp_set_dynamic(false);
+    omp_set_num_threads(numThreads);
+    #pragma omp parallel 
+    {
+        int tNum = omp_get_thread_num();
+        processTextChunk(chunks[tNum],ref(localWordCounts[tNum]), ref(localWordCountSizes[tNum]), ref(localWordCountCapacities[tNum]));
     }
 
     WordCount* globalWordCounts = new WordCount[INITIAL_CAPACITY];
@@ -212,7 +223,6 @@ int main(int argc, char** argv) {
     delete[] localWordCountSizes;
     delete[] localWordCountCapacities;
     delete[] globalWordCounts;
-    delete[] threads;
 
     return 0;
 }
