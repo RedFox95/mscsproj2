@@ -1,11 +1,13 @@
 #include <iostream>
 #include <fstream>
-#include <thread>
+#include <omp.h>
 #include <string>
+#include <chrono>
 
 using namespace std;
 
-const int INITIAL_CAPACITY = 10;
+// higher initial capacity if the #1 goal is runtime not memory
+const int INITIAL_CAPACITY = 100;
 
 struct WordCount {
     string word;
@@ -37,6 +39,8 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
             word += toLower(c);
         } else if (!word.empty()) {
             bool found = false;
+            // #pragma omp for // if we do this here then found is always false. can't make it shared either..
+            // in writeup can mention figuring out when was best to use "omp for" - since it doesn't seem great for this exact implementation
             for (int i = 0; i < localWordCountSize; ++i) {
                 if (localWordCounts[i].word == word) {
                     localWordCounts[i].count++;
@@ -71,51 +75,59 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
     }
 }
 
-void merge(WordCount arr[], int l, int m, int r) {
-    int n1 = m - l + 1;
-    int n2 = r - m;
+int myPartition(int low, int high, WordCount* arr) {
+    WordCount pivot = arr[high];
+    int i = (low - 1);
 
-    WordCount* L = new WordCount[n1];
-    WordCount* R = new WordCount[n2];
-
-    for (int i = 0; i < n1; i++)
-        L[i] = arr[l + i];
-    for (int j = 0; j < n2; j++)
-        R[j] = arr[m + 1 + j];
-
-    int i = 0;
-    int j = 0;
-    int k = l;
-
-    while (i < n1 && j < n2) {
-        if (L[i].count >= R[j].count) {
-            arr[k++] = L[i++];
-        } else {
-            arr[k++] = R[j++];
+    for (int j = low; j < high; j++) {
+        if (arr[j].count > pivot.count) {
+            i++;
+            // Swap arr[i] and arr[j]
+            WordCount temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
         }
     }
 
-    while (i < n1) {
-        arr[k++] = L[i++];
-    }
+    // Swap arr[i + 1] and arr[high] (or pivot)
+    WordCount temp = arr[i + 1];
+    arr[i + 1] = arr[high];
+    arr[high] = temp;
 
-    while (j < n2) {
-        arr[k++] = R[j++];
-    }
-
-    delete[] L;
-    delete[] R;
+    return i + 1;
 }
 
-void mergeSort(WordCount arr[], int l, int r) {
-    if (l < r) {
-        int m = l + (r - l) / 2;
-
-        mergeSort(arr, l, m);
-        mergeSort(arr, m + 1, r);
-
-        merge(arr, l, m, r);
+void seq_qsort(int p, int r, WordCount* arr) {
+    if (p < r) {
+        int q = myPartition(p, r, arr);
+        seq_qsort(p, q - 1, arr);
+        seq_qsort(q + 1, r, arr);
     }
+}
+
+// reference for this quicksort is https://mcbeukman.medium.com/parallel-quicksort-using-openmp-9d18d7468cac
+// TODO we should put the link in our writeup if we use this
+void q_sort_sections(int p, int r, WordCount* data, int low_limit) {
+    if (p < r) {
+        if (r - p < low_limit) 
+        {
+            return seq_qsort(p, r, data);
+        }else{
+            int q = myPartition(p, r, data);
+            // only 2 threads because we only have 2 things to do in this recursive call
+            #pragma omp parallel sections shared(data) num_threads(2)
+            {
+                #pragma omp section
+                q_sort_sections(p, q - 1, data, low_limit);
+                #pragma omp section
+                q_sort_sections(q + 1, r, data, low_limit);
+            }
+        }
+    } 
+}
+
+void par_q_sort_sections(int p, int r, WordCount* data){
+    q_sort_sections(p, r, data, omp_get_num_threads() - 1);
 }
 
 void mergeGlobalCounts(WordCount*& globalCounts, int& globalSize, int& globalCapacity, WordCount* localCounts, int localSize) {
@@ -142,6 +154,7 @@ int main(int argc, char** argv) {
         cerr << "Usage: " << argv[0] << " <inputFile> <numberOfThreads>\n";
         return 1;
     }
+    int numThreads = atoi(argv[2]);
 
     string inputFile = argv[1];
     ifstream file(inputFile);
@@ -152,10 +165,7 @@ int main(int argc, char** argv) {
 
     string fileContents((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
     file.close();
-
-    int numThreads = atoi(argv[2]);
-    auto start = chrono::high_resolution_clock::now();
-    thread* threads = new thread[numThreads];
+  
     WordCount** localWordCounts = new WordCount*[numThreads];
     int* localWordCountSizes = new int[numThreads]{0};
     int* localWordCountCapacities = new int[numThreads];
@@ -166,33 +176,48 @@ int main(int argc, char** argv) {
     }
 
     size_t chunkSize = fileContents.size() / numThreads;
+    string chunks[numThreads];
     auto startTime = chrono::high_resolution_clock::now();
 
+    size_t start, end;
+    bool endChanged = false;
     for (size_t i = 0; i < numThreads; ++i) {
-        size_t start = i * chunkSize;
-        size_t end = (i + 1) * chunkSize;
+        if (endChanged) {
+            // adjust the starting index if we had to move the previous ending index
+            start = end + 1;
+        } else {
+            start = i * chunkSize;
+        }
+        end = (i + 1) * chunkSize;
         if (i == numThreads - 1) {
             end = fileContents.size();
         }
         while (end < fileContents.size() && isalpha(fileContents[end])) {
             ++end;
+            endChanged = true;
         }
-        threads[i] = thread(processTextChunk, fileContents.substr(start, end - start), ref(localWordCounts[i]), ref(localWordCountSizes[i]), ref(localWordCountCapacities[i]));
+        chunks[i] = fileContents.substr(start, end - start);
     }
 
-    for (int i = 0; i < numThreads; ++i) {
-        threads[i].join();
-    }
 
     WordCount* globalWordCounts = new WordCount[INITIAL_CAPACITY];
     int globalWordCountSize = 0;
     int globalWordCountCapacity = INITIAL_CAPACITY;
 
-    for (int i = 0; i < numThreads; ++i) {
-        mergeGlobalCounts(globalWordCounts, globalWordCountSize, globalWordCountCapacity, localWordCounts[i], localWordCountSizes[i]);
+    omp_set_dynamic(false);
+    omp_set_num_threads(numThreads);
+    #pragma omp parallel 
+    {
+        int tNum = omp_get_thread_num();
+        processTextChunk(chunks[tNum],ref(localWordCounts[tNum]), ref(localWordCountSizes[tNum]), ref(localWordCountCapacities[tNum]));
+
+        #pragma omp for
+        for (int i = 0; i < numThreads; ++i) {
+            mergeGlobalCounts(globalWordCounts, globalWordCountSize, globalWordCountCapacity, localWordCounts[i], localWordCountSizes[i]);
+        }
     }
 
-    mergeSort(globalWordCounts, 0, globalWordCountSize - 1);
+    par_q_sort_sections(0, globalWordCountSize, globalWordCounts);
 
     auto endTime = chrono::high_resolution_clock::now(); 
 
@@ -212,7 +237,6 @@ int main(int argc, char** argv) {
     delete[] localWordCountSizes;
     delete[] localWordCountCapacities;
     delete[] globalWordCounts;
-    delete[] threads;
 
     return 0;
 }
