@@ -7,7 +7,7 @@
 using namespace std;
 
 // higher initial capacity if the #1 goal is runtime not memory
-const int INITIAL_CAPACITY = 100;
+const int INITIAL_CAPACITY = 1000;
 
 struct WordCount {
     string word;
@@ -15,6 +15,10 @@ struct WordCount {
 };
 
 void resizeWordCounts(WordCount*& arr, int& capacity) {
+    if (capacity < 0) {
+        return;
+    }
+    
     int newCapacity = capacity * 2;
     WordCount* newArr = new WordCount[newCapacity];
     for (int i = 0; i < capacity; ++i) {
@@ -238,5 +242,10 @@ int main(int argc, char** argv) {
     delete[] localWordCountCapacities;
     delete[] globalWordCounts;
 
+    localWordCountCounts = nullptr;
+    localWordCountSizes = nullptr;
+    localWordCountCapacities = nullptr;
+    globalWordCounts = nullptr;
+    
     return 0;
 }
