@@ -155,6 +155,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     int numThreads = atoi(argv[2]);
+
     string inputFile = argv[1];
     ifstream file(inputFile);
     if (!file) {
@@ -164,7 +165,7 @@ int main(int argc, char** argv) {
 
     string fileContents((istreambuf_iterator<char>(file)), istreambuf_iterator<char>());
     file.close();
-
+  
     WordCount** localWordCounts = new WordCount*[numThreads];
     int* localWordCountSizes = new int[numThreads]{0};
     int* localWordCountCapacities = new int[numThreads];
@@ -197,6 +198,8 @@ int main(int argc, char** argv) {
         }
         chunks[i] = fileContents.substr(start, end - start);
     }
+
+
     WordCount* globalWordCounts = new WordCount[INITIAL_CAPACITY];
     int globalWordCountSize = 0;
     int globalWordCountCapacity = INITIAL_CAPACITY;
@@ -217,6 +220,7 @@ int main(int argc, char** argv) {
     par_q_sort_sections(0, globalWordCountSize, globalWordCounts);
 
     auto endTime = chrono::high_resolution_clock::now(); 
+
     chrono::duration<double, milli> runtime = endTime - startTime;
     cout << "Runtime: " << runtime.count() << " ms" << endl;   
 
