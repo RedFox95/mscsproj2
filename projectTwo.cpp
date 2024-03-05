@@ -6,7 +6,6 @@
 
 using namespace std;
 
-// higher initial capacity if the #1 goal is runtime not memory
 const int INITIAL_CAPACITY = 1000;
 
 struct WordCount {
@@ -43,8 +42,6 @@ void processTextChunk(const string& textChunk, WordCount*& localWordCounts, int&
             word += toLower(c);
         } else if (!word.empty()) {
             bool found = false;
-            // #pragma omp for // if we do this here then found is always false. can't make it shared either..
-            // in writeup can mention figuring out when was best to use "omp for" - since it doesn't seem great for this exact implementation
             for (int i = 0; i < localWordCountSize; ++i) {
                 if (localWordCounts[i].word == word) {
                     localWordCounts[i].count++;
@@ -109,8 +106,6 @@ void seq_qsort(int p, int r, WordCount* arr) {
     }
 }
 
-// reference for this quicksort is https://mcbeukman.medium.com/parallel-quicksort-using-openmp-9d18d7468cac
-// TODO we should put the link in our writeup if we use this
 void q_sort_sections(int p, int r, WordCount* data, int low_limit) {
     if (p < r) {
         if (r - p < low_limit) 
